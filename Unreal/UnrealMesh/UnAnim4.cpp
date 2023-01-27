@@ -462,6 +462,9 @@ static void ReadTimeArray(FArchive &Ar, int NumKeys, TArray<float> &Times, int N
 					{							\
 						VecType v;				\
 						Reader << v;			\
+						v.X = v.X * 100;			\
+						v.Y = v.Y * 100;			\
+						v.Z = v.Z * 100;			\
 						FVector v2 = v.ToVector(Mins, Ranges); \
 						Array.Add(CVT(v2));		\
 					}							\
