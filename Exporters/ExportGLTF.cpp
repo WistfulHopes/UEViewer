@@ -653,7 +653,8 @@ static void ExportAnimations(GLTFExportContext& Context, FArchive& Ar)
 			enum ChannelType
 			{
 				TRANSLATION,
-				ROTATION
+				ROTATION,
+				SCALE
 			};
 
 			int BoneNodeIndex;
@@ -696,6 +697,12 @@ static void ExportAnimations(GLTFExportContext& Context, FArchive& Ar)
 			Sampler->BoneNodeIndex = MeshBoneIndex + FIRST_BONE_NODE;
 			Sampler->Track = Track;
 
+			int ScaleSamplerIndex = Samplers.Num();
+			Sampler = new (Samplers) AnimSampler;
+			Sampler->Type = AnimSampler::SCALE;
+			Sampler->BoneNodeIndex = MeshBoneIndex + FIRST_BONE_NODE;
+			Sampler->Track = Track;
+
 			if (bHasOutput)
 			{
 				Ar.Printf(",\n");
@@ -707,8 +714,12 @@ static void ExportAnimations(GLTFExportContext& Context, FArchive& Ar)
 				TranslationSamplerIndex, MeshBoneIndex + FIRST_BONE_NODE, "translation"
 			);
 			Ar.Printf(
-				"        { \"sampler\" : %d, \"target\" : { \"node\" : %d, \"path\" : \"%s\" } }",
+				"        { \"sampler\" : %d, \"target\" : { \"node\" : %d, \"path\" : \"%s\" } },\n",
 				RotationSamplerIndex, MeshBoneIndex + FIRST_BONE_NODE, "rotation"
+			);
+			Ar.Printf(
+				"        { \"sampler\" : %d, \"target\" : { \"node\" : %d, \"path\" : \"%s\" } }",
+				ScaleSamplerIndex, MeshBoneIndex + FIRST_BONE_NODE, "scale"
 			);
 			bHasOutput = true;
 		}
@@ -726,13 +737,37 @@ static void ExportAnimations(GLTFExportContext& Context, FArchive& Ar)
 			const AnimSampler& Sampler = Samplers[SamplerIndex];
 
 			// Prepare time array
-			const TArray<float>* TimeArray = (Sampler.Type == AnimSampler::TRANSLATION) ? &Sampler.Track->KeyPosTime : &Sampler.Track->KeyQuatTime;
+			const TArray<float>* TimeArray;
+			if (Sampler.Type == AnimSampler::TRANSLATION)
+			{
+				TimeArray = &Sampler.Track->KeyPosTime;
+			}
+			else if (Sampler.Type == AnimSampler::ROTATION)
+			{
+				TimeArray = &Sampler.Track->KeyQuatTime;
+			}
+			else
+			{
+				TimeArray = &Sampler.Track->KeyScaleTime;
+			}
 			if (TimeArray->Num() == 0)
 			{
 				// For this situation, use track's time array
 				TimeArray = &Sampler.Track->KeyTime;
 			}
-			int NumKeys = Sampler.Type == (AnimSampler::TRANSLATION) ? Sampler.Track->KeyPos.Num() : Sampler.Track->KeyQuat.Num();
+			int NumKeys;
+			if (Sampler.Type == AnimSampler::TRANSLATION)
+			{
+				NumKeys = Sampler.Track->KeyPos.Num();
+			}
+			else if (Sampler.Type == AnimSampler::ROTATION)
+			{
+				NumKeys = Sampler.Track->KeyQuat.Num();
+			}
+			else
+			{
+				NumKeys = Sampler.Track->KeyScale.Num();
+			}
 
 			int TimeBufIndex = Context.Data.AddZeroed();
 			BufferData& TimeBuf = Context.Data[TimeBufIndex];
@@ -781,7 +816,7 @@ static void ExportAnimations(GLTFExportContext& Context, FArchive& Ar)
 					DataBuf.Put(Pos);
 				}
 			}
-			else
+			else if (Sampler.Type == AnimSampler::ROTATION)
 			{
 				// Rotation track
 				DataBuf.Setup(NumKeys, "VEC4", BufferData::FLOAT, sizeof(CQuat));
@@ -794,6 +829,17 @@ static void ExportAnimations(GLTFExportContext& Context, FArchive& Ar)
 						Rot.Conjugate();
 					}
 					DataBuf.Put(Rot);
+				}
+			}
+			else
+			{
+				// Scale track
+				DataBuf.Setup(NumKeys, "VEC3", BufferData::FLOAT, sizeof(CVec3));
+				for (int i = 0; i < NumKeys; i++)
+				{
+					CVec3 Scale = Sampler.Track->KeyScale[i];
+					TransformPosition(Scale);
+					DataBuf.Put(Scale);
 				}
 			}
 

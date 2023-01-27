@@ -445,7 +445,27 @@ static void ReadTimeArray(FArchive &Ar, int NumKeys, TArray<float> &Times, int N
 						Array.Add(CVT(q2));		\
 					}							\
 					break;
-
+#define TS(Enum, VecType)						\
+				case Enum:						\
+					{							\
+						VecType v;				\
+						Reader << v;			\
+						v.X = v.X * 100;			\
+						v.Y = v.Y * 100;			\
+						v.Z = v.Z * 100;			\
+						A->KeyScale.Add(CVT(v));	\
+					}							\
+					break;
+// position ranged
+#define TSR(Enum, VecType, Array)				\
+				case Enum:						\
+					{							\
+						VecType v;				\
+						Reader << v;			\
+						FVector v2 = v.ToVector(Mins, Ranges); \
+						Array.Add(CVT(v2));		\
+					}							\
+					break;
 static void ReadPerTrackQuatData(FArchive& Reader, int TrackIndex, const char* TrackKind,
 	TArray<CQuat>& DstKeys, TArray<float>& DstTimeKeys, int NumFrames)
 {
@@ -1000,11 +1020,20 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 		int TransKeys   = Seq->CompressedTrackOffsets[offsetIndex+1];
 		int RotOffset   = Seq->CompressedTrackOffsets[offsetIndex+2];
 		int RotKeys     = Seq->CompressedTrackOffsets[offsetIndex+3];
+		int ScaleOffset = 0;
+		int ScaleKeys   = 0;
+		
+		if (Seq->CompressedScaleOffsets.IsValid())
+		{
+			ScaleOffset = Seq->CompressedScaleOffsets.OffsetData[TrackIndex * 2];
+			ScaleKeys   =   Seq->CompressedScaleOffsets.OffsetData[TrackIndex * 2 + 1];
+		}
 //		appPrintf("[%d:%d:%d] :  %d[%d]  %d[%d]  %d[%d]\n", j, Seq->RotationCompressionFormat, Seq->TranslationCompressionFormat, TransOffset, TransKeys, RotOffset, RotKeys, ScaleOffset, ScaleKeys);
 
 		A->KeyPos.Empty(TransKeys);
 		A->KeyQuat.Empty(RotKeys);
-
+		if (ScaleOffset > 0)
+			A->KeyScale.Empty(ScaleKeys);
 		FVector Mins, Ranges;
 
 		// read translation keys
@@ -1088,7 +1117,41 @@ void USkeleton::ConvertAnims(UAnimSequence4* Seq)
 			Reader.Seek(Align(Reader.Tell(), 4));
 			ReadTimeArray(Reader, RotKeys, A->KeyQuatTime, Seq->NumFrames);
 		}
+		
+		// read scale keys
+		if (ScaleKeys && ScaleOffset > 0)
+		{
+			Reader.Seek(ScaleOffset);
+			AnimationCompressionFormat ScaleCompressionFormat = Seq->ScaleCompressionFormat;
+			if (ScaleKeys == 1)
+				ScaleCompressionFormat = ACF_None;	// single key is stored without compression
+			// read mins/ranges
+			if (ScaleCompressionFormat == ACF_IntervalFixed32NoW)
+			{
+				Reader << Mins << Ranges;
+			}
 
+			for (int k = 0; k < ScaleKeys; k++)
+			{
+				switch (ScaleCompressionFormat)
+				{
+				TS (ACF_None,               FVector)
+				TS (ACF_Float96NoW,         FVector)
+				TSR(ACF_IntervalFixed32NoW, FVectorIntervalFixed32, A->KeyScale)
+				TS (ACF_Fixed48NoW,         FVectorFixed48)
+				case ACF_Identity:
+					A->KeyScale.Add(nullVec);
+					break;
+				default:
+					appError("Unknown scale compression method: %d (%s)", ScaleCompressionFormat, EnumToName(ScaleCompressionFormat));
+				}
+			}
+
+			// align to 4 bytes
+			Reader.Seek(Align(Reader.Tell(), 4));
+			if (HasTimeTracks)
+				ReadTimeArray(Reader, ScaleKeys, A->KeyScaleTime, Seq->NumFrames);
+		}
 #if DEBUG_DECOMPRESS
 //		appPrintf("[%s : %s] Frames=%d KeyPos.Num=%d KeyQuat.Num=%d KeyFmt=%s\n", *Seq->SequenceName, *TrackBoneNames[j],
 //			Seq->NumFrames, A->KeyPos.Num(), A->KeyQuat.Num(), *Seq->KeyEncodingFormat);
